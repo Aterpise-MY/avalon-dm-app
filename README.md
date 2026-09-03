@@ -23,6 +23,7 @@
 - [实现注记与已知问题](#实现注记与已知问题)
 - [已知取舍](#已知取舍)
 - [后续计划](#后续计划)
+- [相关文件](#相关文件)
 
 ---
 
@@ -45,43 +46,58 @@
 ## 文件结构
 
 ```
-Avalon DM APP/
-├── avalon-dm.jsx        # 全部实现，735 行，单文件 React 组件
-├── avalon-dm-spec.md    # 完整设计文档（规则、流程、视觉、边界情况）
-└── README.md            # 本文件
+avalon-dm-app/
+├── avalon-dm.jsx           # 全部实现，748 行，单文件 React 组件
+├── main.jsx                # React 挂载入口
+├── index.html              # Vite 入口，含 viewport-fit=cover 与主题色
+├── styles.css              # Tailwind 入口 + 深色底
+├── vite.config.js          # Vite + React + Tailwind 插件
+├── package.json
+├── avalon-dm-spec.md       # 完整设计文档（规则、流程、视觉、边界情况）
+├── README.md               # 本文件
+├── CLAUDE.md               # AI 协作的操作约定
+├── .agent-orchestrator.json
+├── .claude/
+│   ├── agents/             # 五个子 agent 定义
+│   └── skills/
+│       └── avalon-frontend-design/   # 前端设计系统
+└── .github/                # issue / PR 模板
 ```
 
-仓库里没有 `package.json`、构建配置或测试——`avalon-dm.jsx` 被设计成直接投放到 Claude Artifact 环境里跑的单文件组件。
+`avalon-dm.jsx` 仍是唯一的实现文件，其余是围绕它搭的工程脚手架。它保留了「单文件组件」的形态，可以原样投放回 Claude Artifact。
 
 ---
 
 ## 运行方式
 
-### 依赖
+### 本地开发（推荐）
 
-- **React**（`useState` / `useEffect` / `useRef`，无第三方状态库）
-- **Tailwind CSS**——布局类名（`flex`、`grid-cols-3`、`rounded-xl`、`active:scale-95` 等）直接写在 `className` 上；颜色与字体则全部走内联 `style`，取自文件顶部的 `C` 调色板
-- **`window.storage`**——宿主提供的异步键值存储，用于记住上次的玩家名单（可选，缺失时静默降级）
-
-### 作为 Claude Artifact 运行（默认载体）
-
-把 `avalon-dm.jsx` 的内容作为 React Artifact 投放即可。React、Tailwind 与 `window.storage` 都由宿主提供，无需额外配置。
-
-### 在本地 React 工程里运行
-
-没有现成的脚手架，需要自己搭一个带 Tailwind 的 React 环境（Vite + React + Tailwind 即可），然后：
-
-```jsx
-import AvalonDM from "./avalon-dm.jsx";
-
-export default function App() {
-  return <AvalonDM />;
-}
+```bash
+npm install
+npm run dev
 ```
 
-组件默认导出，**不接受任何 props**，自带全屏外壳（`minHeight: 100vh`）。
+打开 http://localhost:5173/。`server.host` 已开启，同一局域网下的手机可以直接访问终端打印的 Network 地址——这个 App 只有在真机上竖屏拿着才看得准。
 
-> 注意：本地环境下 `window.storage` 不存在，「载入上次的 N 位玩家」不会出现，其余功能不受影响。若要在本地启用，需自行实现 `window.storage.get(key)`（返回 `{ value }`）与 `window.storage.set(key, value)` 两个异步方法。
+| 命令 | 作用 |
+|---|---|
+| `npm run dev` | Vite 开发服务器，带热更新 |
+| `npm run build` | 产出 `dist/` |
+| `npm run preview` | 本地预览构建产物 |
+| `npm test` | Vitest（目前还没有测试文件） |
+
+### 依赖
+
+- **React 19**——只用 `useState` / `useEffect` / `useRef`，无第三方状态库
+- **Tailwind CSS v4**——经 `@tailwindcss/vite` 引入。布局类名（`flex`、`grid-cols-3`、`rounded-xl`、`active:scale-95` 等）写在 `className` 上；颜色与字体全部走内联 `style`，取自文件顶部的 `C` 调色板。**Tailwind 不是可选项**：`avalon-dm.jsx` 里有 65 处工具类，缺了它布局会塌
+- **Vite 8**——构建与开发服务器
+- **`window.storage`**——宿主提供的异步键值存储，用于记住上次的玩家名单（可选，缺失时静默降级）
+
+### 作为 Claude Artifact 运行
+
+把 `avalon-dm.jsx` 的内容作为 React Artifact 投放即可。React、Tailwind 与 `window.storage` 都由宿主提供，不需要本仓库的任何配置。组件默认导出，**不接受任何 props**，自带全屏外壳。
+
+> **本地跑的时候没有 `window.storage`**，「载入上次的 N 位玩家」不会出现，其余功能不受影响。若要在本地启用，需自行实现 `window.storage.get(key)`（返回 `{ value }`）与 `window.storage.set(key, value)` 两个异步方法。参见下方「实现注记」第 1 条。
 
 ---
 
@@ -292,6 +308,15 @@ State = {
 - 所有可点元素按下缩放 95%（`active:scale-95`）
 - 头像描边颜色即状态：金 = 选中/队长，蓝 = 好人/赞成，红 = 坏人/反对，灰 = 未选
 - 触控目标不小于 44pt，头像网格三列
+- 未选中的头像 `opacity: 0.55`。再低在昏暗环境里就读不出人脸了
+- 输入框聚焦时描边转金——原本 `outline: none` 且没有替代反馈
+
+**版式**
+
+- 整个 App 是一列，最宽 `SHELL_W`（480px），宽屏上居中而不是铺满；超过 520px 时 `styles.css` 里的 `.shell-col` 给这一列描边
+- 高度用 `100dvh` 而非 `100vh`，避免移动端浏览器工具栏遮住底栏
+- 安全区由 `Shell` 统一处理：头部 `max(24px, env(safe-area-inset-top))`，底栏 `max(16px, env(safe-area-inset-bottom))`
+- `Shell` 的 `center` 属性把内容在竖直方向居中，用于内容短于一屏的页面（火漆封信、身份卡、夜晚脚本）。会滚动的页面不要加
 
 ---
 
@@ -302,14 +327,14 @@ State = {
 | 行 | 内容 |
 |---|---|
 | `:4` | `C` — 调色板；`serif` / `mono` 字体常量 |
-| `:22` | `SPLIT` / `TEAM` / `failsNeeded()` — 规则表 |
-| `:32` | `ROLES` — 角色定义；`sideColor()` / `isEvil()` / `isGood()` |
-| `:46` | `buildRoles()` — 牌堆生成；`shuffle()` — Fisher–Yates |
-| `:62` | `knownTo()` — 每个角色夜里能看到谁 |
-| `:77` | `Avatar` — 头像，支持描边色与暗淡态，无照片时回退名字首字 |
-| `:98` | `Btn` — 按钮，`gold` / `ghost` 两种色调 |
-| `:121` | `Rule` — 带金色小标签的分隔线 |
-| `:132` | `AvalonDM` — 主组件，含全部状态、流程函数与八个阶段的渲染分支 |
+| `:25` | `SPLIT` / `TEAM` / `failsNeeded()` — 规则表 |
+| `:35` | `ROLES` — 角色定义；`sideColor()` / `isEvil()` / `isGood()` |
+| `:49` | `buildRoles()` — 牌堆生成；`shuffle()` — Fisher–Yates |
+| `:65` | `knownTo()` — 每个角色夜里能看到谁 |
+| `:80` | `Avatar` — 头像，支持描边色与暗淡态，无照片时回退名字首字 |
+| `:101` | `Btn` — 按钮，`gold` / `ghost` 两种色调 |
+| `:124` | `Rule` — 带金色小标签的分隔线 |
+| `:135` | `AvalonDM` — 主组件，含全部状态、流程函数与八个阶段的渲染分支 |
 
 主组件内部的关键函数：
 
@@ -346,15 +371,15 @@ State = {
 
 **1. 设计文档与实现的存储方式不一致**
 
-`avalon-dm-spec.md` 第 3.1 节写的是「存入本地存储」，实现用的是宿主提供的 `window.storage` 异步 API（`avalon-dm.jsx:163`、`:199`），不是 `localStorage`。因此在没有该 API 的普通浏览器环境里，名单不会被记住，「载入上次的 N 位玩家」不会出现——降级是静默的，不报错。
+`avalon-dm-spec.md` 第 3.1 节写的是「存入本地存储」，实现用的是宿主提供的 `window.storage` 异步 API（`avalon-dm.jsx:166`、`:202`），不是 `localStorage`。因此在没有该 API 的普通浏览器环境里，名单不会被记住，「载入上次的 N 位玩家」不会出现——降级是静默的，不报错。
 
 **2. 投票状态循环回「未投」后仍会被计入票数**
 
-投票的三态循环写作 `未投 → 赞成 → 反对 → undefined`（`avalon-dm.jsx:632`）。切回第三态时值变成 `undefined`，但**键仍留在 `votes` 对象里**。由于计票用的是 `Object.keys(votes).length`，这类玩家会被算作「已投」，并且在 `no = Object.keys(votes).length - yes` 中被计为一张反对票——界面显示「未投」，计票却按反对处理。若要修正，切回未投态时应从对象中删除该键。
+投票的三态循环写作 `未投 → 赞成 → 反对 → undefined`（`avalon-dm.jsx:645`）。切回第三态时值变成 `undefined`，但**键仍留在 `votes` 对象里**。由于计票用的是 `Object.keys(votes).length`，这类玩家会被算作「已投」，并且在 `no = Object.keys(votes).length - yes` 中被计为一张反对票——界面显示「未投」，计票却按反对处理。若要修正，切回未投态时应从对象中删除该键。
 
 **3. `Shell` 与 `Toggle` 定义在组件函数体内**
 
-`Shell`（`avalon-dm.jsx:287`）和 `roles` 阶段的 `Toggle`（`avalon-dm.jsx:381`）每次渲染都会被重新创建成新的组件类型，React 会因此卸载并重建整棵子树，而不是更新它。典型表现是 `setup` 页输入名字时输入框可能失去焦点。修法是把它们提到组件外部，通过 props 传入所需状态。
+`Shell`（`avalon-dm.jsx:290`）和 `roles` 阶段的 `Toggle`（`avalon-dm.jsx:394`）每次渲染都会被重新创建成新的组件类型，React 会因此卸载并重建整棵子树，而不是更新它。典型表现是 `setup` 页输入名字时输入框可能失去焦点。修法是把它们提到组件外部，通过 props 传入所需状态。
 
 ---
 
@@ -384,5 +409,7 @@ State = {
 
 - [`avalon-dm-spec.md`](./avalon-dm-spec.md) — 完整设计文档，含规则推导与视觉规范的详细说明
 - [`avalon-dm.jsx`](./avalon-dm.jsx) — 全部实现
+- [`CLAUDE.md`](./CLAUDE.md) — AI 协作的操作约定：谁能改什么、发布前要谁点头
+- [`.claude/skills/avalon-frontend-design/SKILL.md`](./.claude/skills/avalon-frontend-design/SKILL.md) — 前端设计系统，改任何界面之前先读这个
 
-版本 v1.0 · 载体：React 单文件组件，移动端优先
+版本 v1.0 · 载体：React 单文件组件，移动端优先 · 工程：Vite 8 + React 19 + Tailwind v4
