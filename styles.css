@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #10101e;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 桌面上给这一列描边，手机上（列已经铺满屏宽）不画 */
+@media (min-width: 520px) {
+  .shell-col {
+    border-left: 1px solid #2e2e52;
+    border-right: 1px solid #2e2e52;
+  }
+}

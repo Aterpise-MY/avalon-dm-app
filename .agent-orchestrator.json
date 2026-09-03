@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "project": {
+    "name": "Avalon DM APP",
+    "type": "Web application",
+    "stack": "React 18 (single-file JSX artifact), mobile-first, offline, no backend",
+    "sourceDirectories": [
+      "."
+    ]
+  },
+  "commands": {
+    "dev": "npm run dev",
+    "test": "npm test"
+  },
+  "branches": {
+    "staging": "staging",
+    "production": "main"
+  },
+  "github": {
+    "enabled": true,
+    "milestonePolicy": "create-if-missing"
+  },
+  "orchestration": {
+    "onboardingApproval": "per-task",
+    "mainMayImplement": false,
+    "maxConcurrentSpecialists": 3
+  },
+  "approvals": {
+    "bindToCommit": true,
+    "invalidateOnNewCommit": true,
+    "requirePrOpenAuthorization": true,
+    "requireMergeAuthorization": true
+  },
+  "permanentRoles": [
+    "Main Agent",
+    "HR Agent"
+  ],
+  "specialists": [
+    {
+      "capability": "frontend",
+      "purpose": "Provide frontend expertise for an approved task",
+      "allowedPaths": [
+        "."
+      ],
+      "status": "requested"
+    },
+    {
+      "capability": "game-rules",
+      "purpose": "Provide game-rules expertise for an approved task",
+      "allowedPaths": [
+        "."
+      ],
+      "status": "requested"
+    },
+    {
+      "capability": "design",
+      "purpose": "Provide design expertise for an approved task",
+      "allowedPaths": [
+        "."
+      ],
+      "status": "requested"
+    }
+  ]
+}
