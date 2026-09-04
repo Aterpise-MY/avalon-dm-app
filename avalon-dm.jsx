@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { apiRequest } from "./supabase-client.js";
+import { apiRequest, uploadPlayerPhoto } from "./supabase-client.js";
 
 /* ── 圆桌调色板 ───────────────────────────────── */
 export const C = {
@@ -21,6 +21,47 @@ const mono = { fontFamily: "ui-monospace, 'SF Mono', Menlo, monospace" };
 
 /* 单手持握的一列，最宽 480 —— 桌面上居中，不铺满整屏 */
 export const SHELL_W = 480;
+const MIN_PLAYERS = 5;
+const MAX_PLAYERS = 10;
+
+const makePlayer = (seat) => ({
+  id: `p${seat}_${Math.random().toString(36).slice(2, 8)}`,
+  name: "",
+  photo: null,
+  photoPath: null,
+  role: null,
+  uploading: false,
+  photoError: "",
+});
+
+function cropPlayerPhoto(file) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    const objectUrl = URL.createObjectURL(file);
+    image.onload = () => {
+      const side = Math.min(image.width, image.height);
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 520;
+      const context = canvas.getContext("2d");
+      if (!context) {
+        URL.revokeObjectURL(objectUrl);
+        reject(new Error("无法处理这张照片"));
+        return;
+      }
+      context.drawImage(image, (image.width - side) / 2, (image.height - side) / 2, side, side, 0, 0, 520, 520);
+      canvas.toBlob((blob) => {
+        URL.revokeObjectURL(objectUrl);
+        if (blob) resolve(blob);
+        else reject(new Error("无法压缩这张照片"));
+      }, "image/jpeg", 0.78);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error("无法读取这张照片"));
+    };
+    image.src = objectUrl;
+  });
+}
 
 /* ── 规则表 ───────────────────────────────────── */
 const SPLIT = {
@@ -160,6 +201,8 @@ export default function AvalonDM({ onSignOut }) {
   const [gameId, setGameId] = useState(null);
   const [dbStatus, setDbStatus] = useState("checking");
   const [startingGame, setStartingGame] = useState(false);
+  const [clearingPlayers, setClearingPlayers] = useState(false);
+  const [playerMessage, setPlayerMessage] = useState("");
 
   const fileRef = useRef(null);
   const pendingRef = useRef(null);
@@ -186,39 +229,53 @@ export default function AvalonDM({ onSignOut }) {
           }
         } catch (e) { /* 没有本地存档 */ }
       }
-      if (roster?.length) setSaved(roster);
+      if (roster?.length) setSaved(roster.slice(0, MAX_PLAYERS));
     })();
   }, []);
 
   useEffect(() => {
     setPlayers((prev) => {
       const next = [];
-      for (let i = 0; i < count; i++) next.push(prev[i] || { id: "p" + i + "_" + Math.random().toString(36).slice(2, 6), name: "", photo: null, role: null });
+      for (let i = 0; i < count; i++) next.push(prev[i] || makePlayer(i));
       return next;
     });
   }, [count]);
 
   const setP = (i, patch) => setPlayers((ps) => ps.map((p, k) => (k === i ? { ...p, ...patch } : p)));
+  const setPlayerById = (id, patch) => setPlayers((ps) => ps.map((p) => (p.id === id ? { ...p, ...patch } : p)));
 
   const openCamera = (i) => { pendingRef.current = i; fileRef.current?.click(); };
-  const onFile = (e) => {
+  const onFile = async (e) => {
     const f = e.target.files?.[0]; const i = pendingRef.current;
     e.target.value = "";
     if (!f || i == null) return;
-    const img = new Image(); const url = URL.createObjectURL(f);
-    img.onload = () => {
-      const s = Math.min(img.width, img.height);
-      const cv = document.createElement("canvas"); cv.width = cv.height = 260;
-      const ctx = cv.getContext("2d");
-      ctx.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, 260, 260);
-      setP(i, { photo: cv.toDataURL("image/jpeg", 0.72) });
-      URL.revokeObjectURL(url);
-    };
-    img.src = url;
+    const playerId = players[i]?.id;
+    if (!playerId) return;
+
+    setPlayerMessage("");
+    setPlayerById(playerId, { uploading: true, photoError: "" });
+    setDbStatus("saving");
+    try {
+      const jpegBlob = await cropPlayerPhoto(f);
+      const uploaded = await uploadPlayerPhoto(playerId, jpegBlob);
+      setPlayerById(playerId, {
+        photo: uploaded.signedUrl,
+        photoPath: uploaded.path,
+        uploading: false,
+        photoError: "",
+      });
+      setDbStatus("saved");
+      setPlayerMessage("照片已安全上传到 Supabase");
+    } catch (error) {
+      console.error("Player photo upload failed", error);
+      setPlayerById(playerId, { uploading: false, photoError: "上传失败，点头像重试" });
+      setDbStatus("offline");
+      setPlayerMessage(error?.message || "照片上传失败");
+    }
   };
 
   const saveRoster = async (list) => {
-    const clean = list.map(({ id, name, photo }) => ({ id, name, photo }));
+    const clean = list.slice(0, MAX_PLAYERS).map(({ id, name, photoPath }) => ({ id, name: name.trim(), photoPath: photoPath || null }));
     try {
       const value = JSON.stringify({ players: clean });
       if (window.storage) await window.storage.set("avalon:roster", value);
@@ -231,6 +288,29 @@ export default function AvalonDM({ onSignOut }) {
       setDbStatus("saved");
     } catch (e) {
       setDbStatus("offline");
+    }
+  };
+
+  const clearPlayerProfiles = async () => {
+    if (clearingPlayers || !window.confirm("清除目前玩家名单和所有玩家照片？对局历史会保留，但照片不会保留。")) return;
+    setClearingPlayers(true);
+    setPlayerMessage("");
+    setDbStatus("saving");
+    try {
+      const result = await apiRequest("/players/clear", { method: "POST" });
+      if (window.storage?.delete) await window.storage.delete("avalon:roster");
+      else if (window.storage?.set) await window.storage.set("avalon:roster", JSON.stringify({ players: [] }));
+      window.localStorage.removeItem("avalon:roster");
+      setSaved(null);
+      setPlayers(Array.from({ length: count }, (_, i) => makePlayer(i)));
+      setDbStatus(result.storageWarning ? "offline" : "saved");
+      setPlayerMessage(result.storageWarning ? "玩家资料已清除，但部分照片文件稍后需要重试删除" : "玩家资料和照片已清除，可以输入下一场玩家");
+    } catch (error) {
+      console.error("Clear player profiles failed", error);
+      setDbStatus("offline");
+      setPlayerMessage(error?.message || "清除玩家资料失败");
+    } finally {
+      setClearingPlayers(false);
     }
   };
 
@@ -282,9 +362,10 @@ export default function AvalonDM({ onSignOut }) {
     setTeam([]); setVotes({}); setRejects(0); setHistory([]); setMissionResult(null); setWinner(null); setKilled(null);
     setGameId(null);
 
+    const gamePayload = gamePlayers.map(({ id, name, role, photoPath }) => ({ id, name, role, photoPath: photoPath || null }));
     const created = await persist("/games", {
       method: "POST",
-      body: JSON.stringify({ players: gamePlayers, dealMode, options: opts }),
+      body: JSON.stringify({ players: gamePayload, dealMode, options: opts }),
     });
     if (created?.id) setGameId(String(created.id));
     setPhase("game");
@@ -524,15 +605,19 @@ export default function AvalonDM({ onSignOut }) {
 
   /* ═══════════ 玩家录入 ═══════════ */
   if (phase === "setup") {
-    const ready = players.length === count && players.every((p) => p.name.trim());
+    const uploadingPhotos = players.some((p) => p.uploading);
+    const ready = count >= MIN_PLAYERS && count <= MAX_PLAYERS
+      && players.length === count
+      && players.every((p) => p.name.trim())
+      && !uploadingPhotos;
     return (
       <Shell eyebrow="AVALON · 主持人" title="入座"
         footer={
           <div>
-            <Btn full disabled={!ready} onClick={() => { saveRoster(players); setPhase("roles"); }}>
-              {ready ? "名单齐了，配角色" : "还有人没填名字"}
+            <Btn full disabled={!ready} onClick={async () => { await saveRoster(players); setPhase("roles"); }}>
+              {uploadingPhotos ? "照片上传中…" : ready ? "名单齐了，配角色" : "还有人没填名字"}
             </Btn>
-            <div style={{ color: C.dim, fontSize: 12, marginTop: 8, textAlign: "center" }}>头像可以先跳过，之后随时补拍</div>
+            <div style={{ color: C.dim, fontSize: 12, marginTop: 8, textAlign: "center" }}>每局 5–10 人；头像可以先跳过，之后随时补拍</div>
           </div>
         }>
         <input ref={fileRef} type="file" accept="image/*" capture="user" onChange={onFile} style={{ display: "none" }} />
@@ -540,15 +625,34 @@ export default function AvalonDM({ onSignOut }) {
           把手机依次传给每个人，让他们拍下自己、写上名字。之后这一晚，你都靠这些头像认人。
         </div>
         {saved && (
-          <button onClick={() => { setCount(saved.length); setPlayers(saved.map((s) => ({ ...s, role: null }))); setSaved(null); }}
+          <button onClick={() => {
+            const savedCount = Math.min(Math.max(saved.length, MIN_PLAYERS), MAX_PLAYERS);
+            setCount(savedCount);
+            setPlayers(saved.slice(0, savedCount).map((s) => ({ ...s, photoPath: s.photoPath || s.photo_path || null, role: null, uploading: false, photoError: "" })));
+            setSaved(null);
+          }}
             className="w-full rounded-xl mt-4 active:scale-95 transition"
             style={{ border: `1px dashed ${C.goldDim}`, color: C.gold, padding: "12px", fontSize: 14 }}>
             载入上次的 {saved.length} 位玩家
           </button>
         )}
+        <button
+          type="button"
+          onClick={clearPlayerProfiles}
+          disabled={clearingPlayers || uploadingPhotos}
+          className="w-full rounded-xl mt-3 active:scale-95 transition"
+          style={{ border: `1px solid ${C.line}`, color: clearingPlayers ? C.dim : C.crimson, padding: "11px", fontSize: 13 }}
+        >
+          {clearingPlayers ? "正在清除…" : "清除玩家资料，换一批玩家"}
+        </button>
+        {playerMessage && (
+          <div role="status" className="rounded-xl mt-3 px-3 py-2" style={{ background: C.panel, color: dbStatus === "offline" ? C.crimson : C.azure, fontSize: 12, lineHeight: 1.6 }}>
+            {playerMessage}
+          </div>
+        )}
         <Rule label="人数" />
         <div className="grid grid-cols-6 gap-2">
-          {[5, 6, 7, 8, 9, 10].map((n) => (
+          {Array.from({ length: MAX_PLAYERS - MIN_PLAYERS + 1 }, (_, i) => i + MIN_PLAYERS).map((n) => (
             <button key={n} onClick={() => setCount(n)} className="rounded-xl active:scale-95 transition"
               style={{ padding: "13px 0", background: count === n ? C.gold : C.panel, color: count === n ? C.ink : C.dim, border: `1px solid ${count === n ? C.gold : C.line}`, ...mono, fontSize: 16, fontWeight: 700 }}>
               {n}
@@ -562,17 +666,25 @@ export default function AvalonDM({ onSignOut }) {
         <div className="flex flex-col gap-3">
           {players.map((p, i) => (
             <div key={p.id} className="flex items-center gap-3">
-              <button onClick={() => openCamera(i)} className="active:scale-95 transition">
+              <button type="button" onClick={() => openCamera(i)} disabled={p.uploading} aria-label={`为 ${p.name || `${i + 1} 号位`} 拍照`} className="active:scale-95 transition">
                 <Avatar p={p} size={56} ring={p.photo ? C.gold : C.line} />
               </button>
-              <input
-                value={p.name} onChange={(e) => setP(i, { name: e.target.value })}
-                placeholder={`${i + 1} 号位`}
-                className="flex-1 rounded-xl"
-                style={{ background: C.panel, border: `1px solid ${C.line}`, color: C.text, padding: "13px 14px", fontSize: 16, outline: "none", transition: "border-color .18s" }}
-                onFocus={(e) => (e.target.style.borderColor = C.gold)}
-                onBlur={(e) => (e.target.style.borderColor = C.line)}
-              />
+              <div className="flex-1">
+                <input
+                  value={p.name} onChange={(e) => setP(i, { name: e.target.value })}
+                  placeholder={`${i + 1} 号位`}
+                  maxLength={80}
+                  className="w-full rounded-xl"
+                  style={{ background: C.panel, border: `1px solid ${C.line}`, color: C.text, padding: "13px 14px", fontSize: 16, outline: "none", transition: "border-color .18s" }}
+                  onFocus={(e) => (e.target.style.borderColor = C.gold)}
+                  onBlur={(e) => (e.target.style.borderColor = C.line)}
+                />
+                {(p.uploading || p.photoError) && (
+                  <div style={{ color: p.photoError ? C.crimson : C.gold, fontSize: 11, marginTop: 4 }}>
+                    {p.uploading ? "正在上传照片…" : p.photoError}
+                  </div>
+                )}
+              </div>
             </div>
           ))}
         </div>

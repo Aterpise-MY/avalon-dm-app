@@ -1,5 +1,8 @@
 import { createClient } from "@supabase/supabase-js";
 
+const PLAYER_PHOTOS_BUCKET = "player-photos";
+const PLAYER_PHOTO_TTL_SECONDS = 60 * 60 * 24;
+
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabasePublishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
@@ -37,6 +40,65 @@ function throwIfError(error) {
   if (error) throw error;
 }
 
+async function withSignedPlayerPhotos(client, players) {
+  return Promise.all((players || []).map(async (player) => {
+    const photoPath = player.photo_path || player.photoPath || null;
+    if (!photoPath) {
+      return { ...player, photoPath: null, photo: player.photo || null };
+    }
+
+    const { data, error } = await client.storage
+      .from(PLAYER_PHOTOS_BUCKET)
+      .createSignedUrl(photoPath, PLAYER_PHOTO_TTL_SECONDS);
+
+    return {
+      ...player,
+      photoPath,
+      photo: error ? null : data.signedUrl,
+    };
+  }));
+}
+
+export async function uploadPlayerPhoto(playerId, jpegBlob) {
+  const client = requireClient();
+  const user = await requireUser();
+  const safePlayerId = String(playerId).replace(/[^A-Za-z0-9_-]/g, "_");
+  if (!safePlayerId || !jpegBlob) throw new Error("照片资料不完整");
+
+  const path = `${user.id}/players/${safePlayerId}.jpg`;
+  const { error: uploadError } = await client.storage
+    .from(PLAYER_PHOTOS_BUCKET)
+    .upload(path, jpegBlob, {
+      contentType: "image/jpeg",
+      cacheControl: "3600",
+      upsert: true,
+    });
+  throwIfError(uploadError);
+
+  const { data, error: signedUrlError } = await client.storage
+    .from(PLAYER_PHOTOS_BUCKET)
+    .createSignedUrl(path, PLAYER_PHOTO_TTL_SECONDS);
+  throwIfError(signedUrlError);
+
+  return { path, signedUrl: data.signedUrl };
+}
+
+async function removePlayerPhotoObjects(client, userId, knownPaths = []) {
+  const paths = new Set((knownPaths || []).filter(Boolean));
+  const { data: files, error: listError } = await client.storage
+    .from(PLAYER_PHOTOS_BUCKET)
+    .list(`${userId}/players`, { limit: 100 });
+  throwIfError(listError);
+  for (const file of files || []) paths.add(`${userId}/players/${file.name}`);
+
+  if (!paths.size) return 0;
+  const { error: removeError } = await client.storage
+    .from(PLAYER_PHOTOS_BUCKET)
+    .remove([...paths]);
+  throwIfError(removeError);
+  return paths.size;
+}
+
 async function recentPlayers(client) {
   const { data: roster, error: rosterError } = await client
     .from("roster_snapshots")
@@ -57,12 +119,13 @@ async function recentPlayers(client) {
 
   const { data: players, error: playersError } = await client
     .from("players")
-    .select("id, name, photo")
+    .select("id, name, photo, photo_path")
     .in("id", seats.map(({ player_id }) => player_id));
   throwIfError(playersError);
 
   const byId = new Map((players || []).map((player) => [player.id, player]));
-  return { players: seats.map(({ player_id }) => byId.get(player_id)).filter(Boolean) };
+  const orderedPlayers = seats.map(({ player_id }) => byId.get(player_id)).filter(Boolean);
+  return { players: await withSignedPlayerPhotos(client, orderedPlayers) };
 }
 
 async function listGames(client, limit = 20) {
@@ -90,10 +153,11 @@ async function gameDetails(client, gameId) {
 
   const ids = (playersResult.data || []).map(({ player_id }) => player_id);
   const rosterResult = ids.length
-    ? await client.from("players").select("id, name, photo").in("id", ids)
+    ? await client.from("players").select("id, name, photo, photo_path").in("id", ids)
     : { data: [], error: null };
   throwIfError(rosterResult.error);
-  const byId = new Map((rosterResult.data || []).map((player) => [player.id, player]));
+  const hydratedPlayers = await withSignedPlayerPhotos(client, rosterResult.data || []);
+  const byId = new Map(hydratedPlayers.map((player) => [player.id, player]));
 
   return {
     ...gameResult.data,
@@ -115,6 +179,17 @@ export async function apiRequest(path, options = {}) {
     const { data, error } = await client.rpc("sync_roster", { p_players: body.players });
     throwIfError(error);
     return { rosterId: data, players: body.players?.length || 0 };
+  }
+
+  if (method === "POST" && path === "/players/clear") {
+    const { data: photoPaths, error } = await client.rpc("clear_player_profiles");
+    throwIfError(error);
+    try {
+      const removedPhotos = await removePlayerPhotoObjects(client, user.id, photoPaths);
+      return { cleared: true, removedPhotos };
+    } catch (storageError) {
+      return { cleared: true, removedPhotos: 0, storageWarning: storageError.message };
+    }
   }
 
   if (method === "POST" && path === "/games") {
