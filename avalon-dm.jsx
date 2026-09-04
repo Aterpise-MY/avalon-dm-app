@@ -75,7 +75,7 @@ const TEAM = {
 const failsNeeded = (n, r) => (n >= 7 && r === 3 ? 2 : 1);
 
 const ROLES = {
-  merlin: { n: "梅林", side: "good", d: "知晓所有坏人（莫德雷德除外）。别被刺客认出来。" },
+  merlin: { n: "梅林", side: "good", d: "只知道刺客与莫甘娜。别被刺客认出来。" },
   percival: { n: "派西维尔", side: "good", d: "知晓梅林与莫甘娜两人，但分不清谁是谁。" },
   servant: { n: "忠臣", side: "good", d: "亚瑟的忠臣。没有特殊情报，靠推理。" },
   assassin: { n: "刺客", side: "evil", d: "好人拿到三次成功后，由你指认梅林。" },
@@ -88,6 +88,7 @@ const REVEAL_ORDER = ["oberon", "morgana", "assassin", "mordred", "minion", "mer
 const sideColor = (k) => (ROLES[k]?.side === "evil" ? C.crimson : C.azure);
 const isEvil = (p) => ROLES[p?.role]?.side === "evil";
 const isGood = (p) => ROLES[p?.role]?.side === "good";
+const MERLIN_VISIBLE_ROLES = new Set(["assassin", "morgana"]);
 
 function buildRoles(count, o) {
   const { good, evil } = SPLIT[count];
@@ -105,11 +106,11 @@ function buildRoles(count, o) {
 const shuffle = (a) => { const b = [...a]; for (let i = b.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [b[i], b[j]] = [b[j], b[i]]; } return b; };
 
 /* 每个角色在夜里能看到谁 */
-function knownTo(player, players) {
+export function knownTo(player, players) {
   const others = players.filter((p) => p.id !== player.id);
   const evils = others.filter(isEvil);
   switch (player.role) {
-    case "merlin": return { label: "以下是邪恶阵营", list: evils.filter((p) => p.role !== "mordred") };
+    case "merlin": return { label: "你能看见的邪恶角色", list: evils.filter((p) => MERLIN_VISIBLE_ROLES.has(p.role)) };
     case "percival": return { label: "这两人之一是梅林", list: shuffle(others.filter((p) => p.role === "merlin" || p.role === "morgana")) };
     case "oberon": return { label: "", list: [] };
     default:
