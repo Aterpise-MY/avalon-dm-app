@@ -174,6 +174,66 @@ function Rule({ label }) {
   );
 }
 
+function Shell({ eyebrow, title, children, footer, center, dbStatus, phase, onSignOut, players, peek, setPeek }) {
+  return (
+    <div style={{ background: C.ink, color: C.text, minHeight: "100dvh" }} className="flex justify-center">
+      <div className="shell-col flex flex-col w-full" style={{ maxWidth: SHELL_W, minHeight: "100dvh" }}>
+        <div className="px-5 pb-3" style={{ borderBottom: `1px solid ${C.line}`, paddingTop: "max(24px, env(safe-area-inset-top))" }}>
+          <div style={{ ...serif, color: C.goldDim, fontSize: 11, letterSpacing: "0.34em" }}>{eyebrow}</div>
+          <div className="flex items-end justify-between mt-1">
+            <h1 style={{ ...serif, fontSize: 26, color: C.text, letterSpacing: "0.04em" }}>{title}</h1>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1" title="Supabase 云端保存状态">
+                <span className="rounded-full" style={{ width: 7, height: 7, background: dbStatus === "offline" ? C.crimson : dbStatus === "saving" || dbStatus === "checking" ? C.gold : C.azure }} />
+                <span style={{ color: C.dim, fontSize: 10 }}>
+                  {dbStatus === "offline" ? "云端离线" : dbStatus === "saving" ? "同步中" : dbStatus === "checking" ? "连接中" : "已同步"}
+                </span>
+              </div>
+              {phase === "setup" && onSignOut && (
+                <button onClick={onSignOut} className="rounded-xl active:scale-95 transition"
+                  style={{ border: `1px solid ${C.line}`, color: C.dim, padding: "7px 10px", fontSize: 11 }}>
+                  退出
+                </button>
+              )}
+              {players.some((p) => p.role) && phase !== "pass" && (
+                <button
+                  onPointerDown={() => setPeek(true)} onPointerUp={() => setPeek(false)}
+                  onPointerLeave={() => setPeek(false)}
+                  className="rounded-xl" style={{ border: `1px solid ${C.line}`, color: C.dim, padding: "7px 12px", fontSize: 12 }}
+                >按住看底牌</button>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className={`flex-1 px-5 py-5 overflow-y-auto ${center ? "flex flex-col justify-center" : ""}`}>{children}</div>
+        {footer && (
+          <div className="px-5 pt-4" style={{ borderTop: `1px solid ${C.line}`, background: C.ink2, paddingBottom: "max(16px, env(safe-area-inset-bottom))" }}>
+            {footer}
+          </div>
+        )}
+      </div>
+      {peek && (
+        <div className="fixed inset-0 p-5 overflow-y-auto" style={{ background: "rgba(6,6,14,.97)", zIndex: 50 }}>
+          <div className="mx-auto w-full" style={{ maxWidth: SHELL_W }}>
+            <div style={{ ...serif, color: C.gold, fontSize: 13, letterSpacing: "0.3em" }}>DM 底牌</div>
+            <div className="mt-4 flex flex-col gap-2">
+              {players.map((p) => (
+                <div key={p.id} className="flex items-center gap-3 rounded-xl p-2" style={{ background: C.panel }}>
+                  <Avatar p={p} size={42} ring={sideColor(p.role)} />
+                  <div className="flex-1">
+                    <div style={{ fontSize: 15 }}>{p.name}</div>
+                    <div style={{ ...serif, fontSize: 13, color: sideColor(p.role) }}>{ROLES[p.role]?.n || "未分配"}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ── 主程序 ───────────────────────────────────── */
 export default function AvalonDM({ onSignOut }) {
   const [phase, setPhase] = useState("setup");
@@ -544,64 +604,7 @@ export default function AvalonDM({ onSignOut }) {
     }));
   };
 
-  /* ── 外壳 ── */
-  const Shell = ({ eyebrow, title, children, footer, center }) => (
-    <div style={{ background: C.ink, color: C.text, minHeight: "100dvh" }} className="flex justify-center">
-      <div className="shell-col flex flex-col w-full" style={{ maxWidth: SHELL_W, minHeight: "100dvh" }}>
-      <div className="px-5 pb-3" style={{ borderBottom: `1px solid ${C.line}`, paddingTop: "max(24px, env(safe-area-inset-top))" }}>
-        <div style={{ ...serif, color: C.goldDim, fontSize: 11, letterSpacing: "0.34em" }}>{eyebrow}</div>
-        <div className="flex items-end justify-between mt-1">
-          <h1 style={{ ...serif, fontSize: 26, color: C.text, letterSpacing: "0.04em" }}>{title}</h1>
-          <div className="flex items-center gap-2">
-            <div className="flex items-center gap-1" title="Supabase 云端保存状态">
-              <span className="rounded-full" style={{ width: 7, height: 7, background: dbStatus === "offline" ? C.crimson : dbStatus === "saving" || dbStatus === "checking" ? C.gold : C.azure }} />
-              <span style={{ color: C.dim, fontSize: 10 }}>
-                {dbStatus === "offline" ? "云端离线" : dbStatus === "saving" ? "同步中" : dbStatus === "checking" ? "连接中" : "已同步"}
-              </span>
-            </div>
-            {phase === "setup" && onSignOut && (
-              <button onClick={onSignOut} className="rounded-xl active:scale-95 transition"
-                style={{ border: `1px solid ${C.line}`, color: C.dim, padding: "7px 10px", fontSize: 11 }}>
-                退出
-              </button>
-            )}
-            {players.some((p) => p.role) && phase !== "pass" && (
-              <button
-                onPointerDown={() => setPeek(true)} onPointerUp={() => setPeek(false)}
-                onPointerLeave={() => setPeek(false)}
-                className="rounded-xl" style={{ border: `1px solid ${C.line}`, color: C.dim, padding: "7px 12px", fontSize: 12 }}
-              >按住看底牌</button>
-            )}
-          </div>
-        </div>
-      </div>
-      <div className={`flex-1 px-5 py-5 overflow-y-auto ${center ? "flex flex-col justify-center" : ""}`}>{children}</div>
-      {footer && (
-        <div className="px-5 pt-4" style={{ borderTop: `1px solid ${C.line}`, background: C.ink2, paddingBottom: "max(16px, env(safe-area-inset-bottom))" }}>
-          {footer}
-        </div>
-      )}
-      </div>
-      {peek && (
-        <div className="fixed inset-0 p-5 overflow-y-auto" style={{ background: "rgba(6,6,14,.97)", zIndex: 50 }}>
-          <div className="mx-auto w-full" style={{ maxWidth: SHELL_W }}>
-          <div style={{ ...serif, color: C.gold, fontSize: 13, letterSpacing: "0.3em" }}>DM 底牌</div>
-          <div className="mt-4 flex flex-col gap-2">
-            {players.map((p) => (
-              <div key={p.id} className="flex items-center gap-3 rounded-xl p-2" style={{ background: C.panel }}>
-                <Avatar p={p} size={42} ring={sideColor(p.role)} />
-                <div className="flex-1">
-                  <div style={{ fontSize: 15 }}>{p.name}</div>
-                  <div style={{ ...serif, fontSize: 13, color: sideColor(p.role) }}>{ROLES[p.role]?.n || "未分配"}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+  const shellProps = { dbStatus, phase, onSignOut, players, peek, setPeek };
 
   /* ═══════════ 玩家录入 ═══════════ */
   if (phase === "setup") {
@@ -611,7 +614,7 @@ export default function AvalonDM({ onSignOut }) {
       && players.every((p) => p.name.trim())
       && !uploadingPhotos;
     return (
-      <Shell eyebrow="AVALON · 主持人" title="入座"
+      <Shell {...shellProps} eyebrow="AVALON · 主持人" title="入座"
         footer={
           <div>
             <Btn full disabled={!ready} onClick={async () => { await saveRoster(players); setPhase("roles"); }}>
@@ -706,7 +709,7 @@ export default function AvalonDM({ onSignOut }) {
       </button>
     );
     return (
-      <Shell eyebrow="AVALON · 主持人" title="配置角色"
+      <Shell {...shellProps} eyebrow="AVALON · 主持人" title="配置角色"
         footer={
           <div className="flex flex-col gap-2">
             {overflow && <div style={{ color: C.crimson, fontSize: 13 }}>坏人位只有 {evilSlots} 个，多选的特殊角色会被忽略。</div>}
@@ -751,7 +754,7 @@ export default function AvalonDM({ onSignOut }) {
     const info = knownTo(p, players);
     const last = passIdx === players.length - 1;
     return (
-      <Shell eyebrow={`第 ${passIdx + 1} / ${players.length} 位`} title={sealBroken ? "你的身份" : "请传给"} center>
+      <Shell {...shellProps} eyebrow={`第 ${passIdx + 1} / ${players.length} 位`} title={sealBroken ? "你的身份" : "请传给"} center>
         {!sealBroken ? (
           <div className="flex flex-col items-center" style={{ paddingTop: 18 }}>
             <Avatar p={p} size={110} ring={C.goldDim} />
@@ -808,7 +811,7 @@ export default function AvalonDM({ onSignOut }) {
     const confirmed = nightRolePlayer(s);
     const needsAssignment = dealMode === "manual" && s.type === "confirm";
     return (
-      <Shell eyebrow={`夜晚 · ${nightStep + 1} / ${nightSteps.length}`} title={s.t} center
+      <Shell {...shellProps} eyebrow={`夜晚 · ${nightStep + 1} / ${nightSteps.length}`} title={s.t} center
         footer={
           <div className="flex gap-2">
             {nightStep > 0 && <Btn tone="ghost" small onClick={() => setNightStep(nightStep - 1)}>上一步</Btn>}
@@ -926,7 +929,7 @@ export default function AvalonDM({ onSignOut }) {
     }
 
     return (
-      <Shell eyebrow={`第 ${round + 1} 轮任务 · 需 ${teamSize} 人${need === 2 ? " · 需 2 张失败牌" : ""}`}
+      <Shell {...shellProps} eyebrow={`第 ${round + 1} 轮任务 · 需 ${teamSize} 人${need === 2 ? " · 需 2 张失败牌" : ""}`}
         title={roundFlow[flowIndex]?.[1] || "任务流程"}
         footer={gameFooter}>
         {dealMode === "manual" && (
@@ -1079,7 +1082,7 @@ export default function AvalonDM({ onSignOut }) {
   if (phase === "assassin") {
     const ass = players.find((p) => p.role === "assassin");
     return (
-      <Shell eyebrow="好人已完成三次任务" title="刺客出手">
+      <Shell {...shellProps} eyebrow="好人已完成三次任务" title="刺客出手">
         <div className="flex items-center gap-3">
           <Avatar p={ass} size={56} ring={C.crimson} />
           <div style={{ ...serif, fontSize: 18 }}>{ass.name} 是刺客</div>
@@ -1111,7 +1114,7 @@ export default function AvalonDM({ onSignOut }) {
       "evil-vote": "连续五次组队被否决。",
     }[winner];
     return (
-      <Shell eyebrow="终局" title={title}
+      <Shell {...shellProps} eyebrow="终局" title={title}
         footer={<div className="flex gap-2">
           <Btn tone="ghost" small onClick={resetAll}>换一局</Btn>
           <div className="flex-1"><Btn full onClick={() => { setPhase("roles"); }}>同一批人再来</Btn></div>
