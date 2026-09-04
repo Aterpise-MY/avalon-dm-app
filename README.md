@@ -1,7 +1,7 @@
 # 阿瓦隆 DM 助手 · Avalon DM
 
 > 给线下主持人（DM）用的移动端 App：手机传一圈拍照建档，发身份、跑夜晚、管任务、判刺杀。
-> 前端部署在 AWS Amplify，Email 登录、玩家、对局与历史记录由 Supabase 提供。
+> 前端部署在 AWS Amplify，Google 登录、玩家、对局与历史记录由 Supabase 提供。
 
 移动端优先的 React 单文件组件，为《The Resistance: Avalon》桌游的主持人设计。
 
@@ -51,7 +51,7 @@ avalon-dm-app/
 ├── main.jsx                # React 挂载入口
 ├── index.html              # Vite 入口，含 viewport-fit=cover 与主题色
 ├── styles.css              # Tailwind 入口 + 深色底
-├── auth-gate.jsx           # Supabase Email 注册、登录与 session gate
+├── auth-gate.jsx           # Supabase Google OAuth 与 session gate
 ├── supabase-client.js      # Supabase Auth / Data API 适配层
 ├── supabase/               # 数据库迁移、RLS 与 RPC
 ├── amplify.yml             # AWS Amplify 构建与安全响应头
@@ -99,13 +99,19 @@ npm run dev
 - **React 19**——只用 `useState` / `useEffect` / `useRef`，无第三方状态库
 - **Tailwind CSS v4**——经 `@tailwindcss/vite` 引入。布局类名（`flex`、`grid-cols-3`、`rounded-xl`、`active:scale-95` 等）写在 `className` 上；颜色与字体全部走内联 `style`，取自文件顶部的 `C` 调色板。**Tailwind 不是可选项**：`avalon-dm.jsx` 里有 65 处工具类，缺了它布局会塌
 - **Vite 8**——构建与开发服务器
-- **Supabase JS**——Email/password 登录、session 与 Data API
+- **Supabase JS**——Google OAuth、session 与 Data API
 - **Supabase PostgreSQL**——保存玩家、对局角色、组队投票及任务历史；所有业务表开启 RLS
 - **AWS Amplify Hosting**——托管生产环境静态前端
 
-### Email 登录
+### Google 登录
 
-第一次使用选择「建立账号」，Supabase 会寄出验证邮件；完成验证后用 Email 与密码登录。DM 的玩家和对局数据按账号隔离，未登录或其他账号无法读取。
+选择「使用 Google 账号登录」后由 Google 完成身份验证，第一次登录会自动建立 DM 账号，无需另设密码。玩家和对局数据按账号隔离，未登录或其他账号无法读取。
+
+启用前需要在 Google Auth Platform 建立 Web OAuth Client，并配置：
+
+- Authorized JavaScript origins：`https://main.dzakt8h8vf2bn.amplifyapp.com`、`http://127.0.0.1:5174`、`http://localhost:5174`
+- Authorized redirect URI：`https://ninniidhnnhaoiebuxgf.supabase.co/auth/v1/callback`
+- 将 Client ID 与 Client Secret 填入 Supabase Dashboard 的 Authentication → Sign In / Providers → Google；凭证不要放进 Vite 环境变量或仓库
 
 ---
 
