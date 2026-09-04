@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { knownTo } from "./avalon-dm.jsx";
+import { knownTo, merlinVisiblePlayers } from "./avalon-dm.jsx";
 
 const players = [
   { id: "merlin", role: "merlin" },
@@ -16,6 +16,10 @@ describe("night information", () => {
     const information = knownTo(players[0], players);
 
     expect(information.list.map((player) => player.id)).toEqual(["assassin", "morgana"]);
+  });
+
+  it("uses the same visibility rule during the night ceremony", () => {
+    expect(merlinVisiblePlayers(players).map((player) => player.id)).toEqual(["assassin", "morgana"]);
   });
 
   it("shows Oberon nobody", () => {

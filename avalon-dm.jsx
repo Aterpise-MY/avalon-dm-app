@@ -90,6 +90,10 @@ const isEvil = (p) => ROLES[p?.role]?.side === "evil";
 const isGood = (p) => ROLES[p?.role]?.side === "good";
 const MERLIN_VISIBLE_ROLES = new Set(["assassin", "morgana"]);
 
+export function merlinVisiblePlayers(players) {
+  return players.filter((player) => MERLIN_VISIBLE_ROLES.has(player.role));
+}
+
 function buildRoles(count, o) {
   const { good, evil } = SPLIT[count];
   let ev = ["assassin"];
@@ -110,7 +114,7 @@ export function knownTo(player, players) {
   const others = players.filter((p) => p.id !== player.id);
   const evils = others.filter(isEvil);
   switch (player.role) {
-    case "merlin": return { label: "你能看见的邪恶角色", list: evils.filter((p) => MERLIN_VISIBLE_ROLES.has(p.role)) };
+    case "merlin": return { label: "你能看见的邪恶角色", list: merlinVisiblePlayers(evils) };
     case "percival": return { label: "这两人之一是梅林", list: shuffle(others.filter((p) => p.role === "merlin" || p.role === "morgana")) };
     case "oberon": return { label: "", list: [] };
     default:
@@ -566,8 +570,8 @@ export default function AvalonDM({ onSignOut }) {
 
     s.push({
       t: "梅林确认坏人",
-      x: `所有坏人${inDeck("mordred") ? "（莫德雷德除外）" : ""}伸出大拇指。梅林睁眼，记下这些人。随后坏人收回拇指，梅林闭眼。`,
-      who: by((p) => isEvil(p) && p.role !== "mordred"),
+      x: "刺客与莫甘娜（若本局有莫甘娜）伸出大拇指。梅林睁眼，记下这些人。其他邪恶角色不要动作。随后收回拇指，梅林闭眼。",
+      who: merlinVisiblePlayers(players),
     });
 
     if (dealMode === "manual" && inDeck("percival")) {
