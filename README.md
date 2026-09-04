@@ -1,7 +1,7 @@
 # 阿瓦隆 DM 助手 · Avalon DM
 
-> 给线下主持人（DM）用的单机 App：手机传一圈拍照建档，发身份、跑夜晚、管任务、判刺杀。
-> 全程只有一台设备——不联网、不开房间、不注册。
+> 给线下主持人（DM）用的移动端 App：手机传一圈拍照建档，发身份、跑夜晚、管任务、判刺杀。
+> 前端部署在 AWS Amplify，Email 登录、玩家、对局与历史记录由 Supabase 提供。
 
 移动端优先的 React 单文件组件，为《The Resistance: Avalon》桌游的主持人设计。
 
@@ -39,7 +39,7 @@
 | 队长轮转、连续否决、第四轮双失败牌容易忘 | 全部自动，界面上直接标出来 |
 | 复盘时想不起哪轮谁投了反对 | 逐轮记录，终局回顾 |
 
-**明确不做的事**：不联机、不做多设备、不做战绩排行榜、不替代实体任务牌（成功/失败牌仍用实体牌，App 只收结果）。
+**明确不做的事**：不做互联网房间、不要求每位玩家注册（只有 DM 登录）、不替代实体任务牌（成功/失败牌仍用实体牌，App 只收结果）。
 
 ---
 
@@ -47,11 +47,16 @@
 
 ```
 avalon-dm-app/
-├── avalon-dm.jsx           # 全部实现，748 行，单文件 React 组件
+├── avalon-dm.jsx           # React 主界面与游戏流程
 ├── main.jsx                # React 挂载入口
 ├── index.html              # Vite 入口，含 viewport-fit=cover 与主题色
 ├── styles.css              # Tailwind 入口 + 深色底
-├── vite.config.js          # Vite + React + Tailwind 插件
+├── auth-gate.jsx           # Supabase Email 注册、登录与 session gate
+├── supabase-client.js      # Supabase Auth / Data API 适配层
+├── supabase/               # 数据库迁移、RLS 与 RPC
+├── amplify.yml             # AWS Amplify 构建与安全响应头
+├── vite.config.js          # Vite 与 Tailwind
+├── .env.example            # Supabase 前端配置示例
 ├── package.json
 ├── avalon-dm-spec.md       # 完整设计文档（规则、流程、视觉、边界情况）
 ├── README.md               # 本文件
@@ -64,7 +69,7 @@ avalon-dm-app/
 └── .github/                # issue / PR 模板
 ```
 
-`avalon-dm.jsx` 仍是唯一的实现文件，其余是围绕它搭的工程脚手架。它保留了「单文件组件」的形态，可以原样投放回 Claude Artifact。
+游戏流程仍集中在单一 React 组件中；登录和数据访问拆到 Supabase 适配层。浏览器只持有 publishable key，实际访问范围由登录用户与数据库 RLS 控制。
 
 ---
 
@@ -72,16 +77,19 @@ avalon-dm-app/
 
 ### 本地开发（推荐）
 
+先复制环境变量并填入 Supabase Project URL 与 publishable key：
+
 ```bash
+cp .env.example .env.local
 npm install
 npm run dev
 ```
 
-打开 http://localhost:5173/。`server.host` 已开启，同一局域网下的手机可以直接访问终端打印的 Network 地址——这个 App 只有在真机上竖屏拿着才看得准。
+打开 http://localhost:5174/。`server.host` 已开启，同一局域网下的手机可以直接访问终端打印的 Network 地址。
 
 | 命令 | 作用 |
 |---|---|
-| `npm run dev` | Vite 开发服务器，带热更新 |
+| `npm run dev` | 启动 Vite（5174） |
 | `npm run build` | 产出 `dist/` |
 | `npm run preview` | 本地预览构建产物 |
 | `npm test` | Vitest（目前还没有测试文件） |
@@ -91,13 +99,13 @@ npm run dev
 - **React 19**——只用 `useState` / `useEffect` / `useRef`，无第三方状态库
 - **Tailwind CSS v4**——经 `@tailwindcss/vite` 引入。布局类名（`flex`、`grid-cols-3`、`rounded-xl`、`active:scale-95` 等）写在 `className` 上；颜色与字体全部走内联 `style`，取自文件顶部的 `C` 调色板。**Tailwind 不是可选项**：`avalon-dm.jsx` 里有 65 处工具类，缺了它布局会塌
 - **Vite 8**——构建与开发服务器
-- **`window.storage`**——宿主提供的异步键值存储，用于记住上次的玩家名单（可选，缺失时静默降级）
+- **Supabase JS**——Email/password 登录、session 与 Data API
+- **Supabase PostgreSQL**——保存玩家、对局角色、组队投票及任务历史；所有业务表开启 RLS
+- **AWS Amplify Hosting**——托管生产环境静态前端
 
-### 作为 Claude Artifact 运行
+### Email 登录
 
-把 `avalon-dm.jsx` 的内容作为 React Artifact 投放即可。React、Tailwind 与 `window.storage` 都由宿主提供，不需要本仓库的任何配置。组件默认导出，**不接受任何 props**，自带全屏外壳。
-
-> **本地跑的时候没有 `window.storage`**，「载入上次的 N 位玩家」不会出现，其余功能不受影响。若要在本地启用，需自行实现 `window.storage.get(key)`（返回 `{ value }`）与 `window.storage.set(key, value)` 两个异步方法。参见下方「实现注记」第 1 条。
+第一次使用选择「建立账号」，Supabase 会寄出验证邮件；完成验证后用 Email 与密码登录。DM 的玩家和对局数据按账号隔离，未登录或其他账号无法读取。
 
 ---
 
@@ -120,20 +128,19 @@ npm run dev
 ## 流程与界面
 
 ```
-入座 → 配角色 → [App 发牌 → 传阅身份] 或 [实体牌 → 手动录入]
+入座 → 配角色 → [App 发牌 → 传阅身份] 或 [实体牌 → 夜晚逐角色确认]
      → 夜晚仪式（可跳过） → 任务循环 ×N → 刺杀 → 终局亮牌
 ```
 
-八个阶段由单一的 `phase` 状态驱动：
+七个阶段由单一的 `phase` 状态驱动：
 
 | `phase` | 界面 | 做什么 |
 |---|---|---|
 | `setup` | 入座 | 选人数、传手机拍照填名字；全员填完名字才放行 |
 | `roles` | 配置角色 | 四个特殊角色开关、实时牌堆预览、选择发牌方式 |
 | `pass` | 传阅身份 | 每人一屏，封口态（火漆印）↔ 拆封态（羊皮纸身份卡） |
-| `manual` | 录入身份 | 实体牌模式下由 DM 逐人登记角色，底部弹层选择 |
-| `night` | 夜晚仪式 | 逐句脚本，每屏显示此刻该有动作的人的头像 |
-| `game` | 任务循环 | 三小步循环：`team` 组队 → `vote` 投票 → `mission` 结算 |
+| `night` | 夜晚仪式 | 逐句脚本；实体牌模式同时按揭晓顺序点选角色玩家 |
+| `game` | 任务循环 | 六步循环：交队长 → 组队 → 投票 → 票决 → 任务 → 结果 |
 | `assassin` | 刺客出手 | 列出所有好人，点谁即指认谁 |
 | `end` | 终局 | 胜负与原因、全员亮牌、任务回顾、两个出口 |
 
@@ -150,7 +157,7 @@ npm run dev
 
 ### 夜晚脚本
 
-由 `buildNight()` 根据实际在场角色动态生成，共 4–5 步：
+由 `buildNight()` 根据实际在场角色动态生成。实体牌模式会先确认奥伯伦、莫甘娜、刺客及其他邪恶角色，再进行坏人相认；随后确认梅林并展示坏人，最后确认派西维尔并展示梅林与莫甘娜。未启用角色自动跳过。
 
 1. **闭眼**——所有人闭眼，握拳，伸出大拇指
 2. **坏人相认**——邪恶阵营睁眼互认（有奥伯伦时补一句「奥伯伦不睁眼，也不被看到」）
@@ -159,6 +166,10 @@ npm run dev
 5. **天亮**——所有人睁眼
 
 App 发牌模式下，情报已在拆封环节给过，第一屏提供「大家已在手机上看过情报，跳过夜晚」。实体牌模式按完整脚本走。
+
+### 每轮主持流程
+
+游戏页用六个连续环节提示 DM 当下要做什么。投票与任务结果都有独立的宣布页面，DM 确认宣布完毕后才会进入下一位队长、任务、下一轮、刺杀或终局。
 
 ### DM 底牌
 
@@ -235,44 +246,50 @@ Player = {
 }
 
 State = {
-  phase: 'setup'|'roles'|'pass'|'manual'|'night'|'game'|'assassin'|'end',
+  phase: 'setup'|'roles'|'pass'|'night'|'game'|'assassin'|'end',
   count: 5..10,
   players: Player[],
   opts: { percival, morgana, mordred, oberon },  // 布尔
   dealMode: 'auto'|'manual',
 
   passIdx, sealBroken,      // 传阅
-  manualPick,               // 手动录入选中的玩家下标
   nightStep,                // 夜晚步骤
   peek,                     // 是否正在按住看底牌
 
   round: 0..4,
-  step: 'team'|'vote'|'mission',
+  step: 'leader'|'team'|'vote'|'voteResult'|'mission'|'missionResult',
   leader: number,           // players 下标
   team: string[],           // player id
   votes: { [id]: true|false|undefined },
   rejects: 0..5,
   history: [{ fails, ok, team, leader }],
+  missionResult: { fails, ok }|null,
+  gameId: string|null,      // Supabase PostgreSQL games.id
   winner: 'good'|'evil-assassin'|'evil-mission'|'evil-vote'|null,
   killed: Player|null,
 }
 ```
 
-全部状态都是组件内的 `useState`，没有 reducer、context 或外部 store。
+界面中的即时状态仍由组件内 `useState` 管理；关键事件同时写入 Supabase PostgreSQL。
 
 ---
 
 ## 持久化与隐私
 
-**只持久化一个键：`avalon:roster`**，内容是 `{ players: [{ id, name, photo }] }`——**只有名单，不含任何身份信息**。
+Supabase PostgreSQL 使用以下表：
 
-- 写入时机：`setup` 页点「名单齐了，配角色」时，以及 `startDeal()` 开始发牌时
-- 读取时机：组件挂载时，读到就在首屏显示「载入上次的 N 位玩家」
-- 存取都包在 `try/catch` 里，失败静默忽略，不阻断流程
+| 表 | 内容 |
+|---|---|
+| `players` | 玩家姓名与头像 |
+| `roster_snapshots` / `roster_players` | 最近一次座位名单 |
+| `games` | 对局模式、角色选项、胜负与时间 |
+| `game_players` | 当局座位与秘密身份 |
+| `proposals` | 每次组队、队长、逐人投票与是否通过 |
+| `mission_rounds` | 每轮任务成员、失败牌数量与结果 |
 
-**对局状态全部在内存，关掉即清空**——这是刻意的，避免上一局的身份泄漏到下一局。
+页面右上角显示 Supabase 状态：连接中、保存中、已保存或云端离线。云端暂时不可用时不阻断现场游戏，最近名单会回退存入 `window.storage` 或 `localStorage`；身份与完整对局历史不会写进浏览器存储。
 
-**照片处理**：读入后用 canvas 居中裁成正方形、缩放到 260×260、JPEG 质量 0.72 导出 dataURL。10 人的名单大约 100–300 KB。照片只存在本地，不上传、不外传，换设备就没了。
+照片会在浏览器中裁成 260×260 JPEG data URL，再随玩家资料写入 Supabase。业务表启用 RLS，并以 `auth.uid()` 将资料限制为当前 DM 账号；前端不包含 service-role key。
 
 ---
 
@@ -334,17 +351,17 @@ State = {
 | `:80` | `Avatar` — 头像，支持描边色与暗淡态，无照片时回退名字首字 |
 | `:101` | `Btn` — 按钮，`gold` / `ghost` 两种色调 |
 | `:124` | `Rule` — 带金色小标签的分隔线 |
-| `:135` | `AvalonDM` — 主组件，含全部状态、流程函数与八个阶段的渲染分支 |
+| `:135` | `AvalonDM` — 主组件，含全部状态、API 写入与七个阶段的渲染分支 |
 
 主组件内部的关键函数：
 
 - `openCamera(i)` / `onFile(e)` — 调起系统相机并裁剪照片
-- `saveRoster(list)` — 写入 `avalon:roster`
-- `startDeal()` — 保存名单、洗牌发身份、进入 `pass` 或 `manual`
-- `startGame()` — 重置全部对局状态、随机首任队长、进入 `game`
+- `saveRoster(list)` — 同步玩家与最近名单，失败时回退浏览器存储
+- `startDeal()` — 洗牌发身份，进入 `pass` 或实体牌夜晚确认
+- `startGame()` — 创建数据库对局、随机首任队长、进入 `game`
 - `resetAll()` — 清空所有 role、回到 `setup`
-- `confirmVote()` — 判定通过/否决，处理否决计数与队长顺延
-- `submitMission(fails)` — 记录任务结果，判定三胜/三败/进入下一轮
+- `continueAfterVote()` — 保存组队投票，处理否决计数与队长顺延
+- `continueAfterMission()` — 保存任务结果，判定三胜/三败/进入下一轮
 - `doAssassinate(p)` — 判定刺杀结果
 - `buildNight()` — 按在场角色动态生成夜晚脚本
 - `Shell` — 页面外壳（眉标 / 标题 / 底牌按钮 / 内容 / 底栏 / 底牌浮层）
@@ -359,36 +376,24 @@ State = {
 | 未填名字 | 底部按钮禁用，文案改为「还有人没填名字」 |
 | 中途改人数 | 已填的玩家保留，多出的位补空、少的截断 |
 | 特殊坏人勾多了 | 红字提示，按刺客 → 莫甘娜 → 莫德雷德 → 奥伯伦顺序截断 |
-| 手动录入时角色发完了 | 该角色按钮置灰，显示剩余数量 |
-| 本地存储不可用 | `try/catch` 静默失败，只是没有「载入上次」 |
+| 夜晚确认重复选择玩家 | 已确认其他身份的玩家会置灰；可返回上一步更正 |
+| Supabase 不可用 | 顶部显示「云端离线」，现场游戏继续运行，名单回退浏览器存储 |
 | 第二局复用名单 | 进入配角色页时清空所有 role，夜晚步骤归零 |
 
 ---
 
-## 实现注记与已知问题
+## 数据接口
 
-以下三点是通读代码得出的，供接手的人参考（尚未在真机上逐条复现）：
-
-**1. 设计文档与实现的存储方式不一致**
-
-`avalon-dm-spec.md` 第 3.1 节写的是「存入本地存储」，实现用的是宿主提供的 `window.storage` 异步 API（`avalon-dm.jsx:166`、`:202`），不是 `localStorage`。因此在没有该 API 的普通浏览器环境里，名单不会被记住，「载入上次的 N 位玩家」不会出现——降级是静默的，不报错。
-
-**2. 投票状态循环回「未投」后仍会被计入票数**
-
-投票的三态循环写作 `未投 → 赞成 → 反对 → undefined`（`avalon-dm.jsx:645`）。切回第三态时值变成 `undefined`，但**键仍留在 `votes` 对象里**。由于计票用的是 `Object.keys(votes).length`，这类玩家会被算作「已投」，并且在 `no = Object.keys(votes).length - yes` 中被计为一张反对票——界面显示「未投」，计票却按反对处理。若要修正，切回未投态时应从对象中删除该键。
-
-**3. `Shell` 与 `Toggle` 定义在组件函数体内**
-
-`Shell`（`avalon-dm.jsx:290`）和 `roles` 阶段的 `Toggle`（`avalon-dm.jsx:394`）每次渲染都会被重新创建成新的组件类型，React 会因此卸载并重建整棵子树，而不是更新它。典型表现是 `setup` 页输入名字时输入框可能失去焦点。修法是把它们提到组件外部，通过 props 传入所需状态。
+前端通过 `supabase-client.js` 访问 Supabase Data API。名单与开局使用 `sync_roster`、`create_game` 两个数据库 RPC 保证多表写入原子性；提案、任务与结局直接写入启用 RLS 的业务表。
 
 ---
 
 ## 已知取舍
 
-- **单机单设备**。所有情报都经过 DM 的手机，因此传阅环节必须真的把手机交出去。若有人不愿传手机，改用「实体牌 + 手动录入」模式。
+- **DM 单账号**。玩家不需要账号；主持人登录后可以从不同设备读取自己的数据。
 - **不代管任务牌**。成功/失败牌仍用实体牌，App 只录入结果——保留出牌的手感和「谁出的失败牌」的悬念。
 - **不做撤销**。误点投票可以重新切换；已提交的任务结果无法回退。真出错了只能靠 DM 口头澄清。
-- **照片存在本地**。不上传、不外传，换设备就没了。
+- **照片跟随玩家资料写入 Supabase**。请先取得玩家同意；后续可改为 Storage bucket 以减少数据库列大小。
 
 ---
 
@@ -397,7 +402,7 @@ State = {
 优先级从高到低：
 
 1. **座位号 / 发言顺序**——头像上标 1–10，配合「从队长左手边开始发言」
-2. **投票复盘**——终局展示每轮每人的投票记录，找「连续反对成功队」的可疑者
+2. **历史浏览器**——把已保存的对局、每轮投票与任务结果做成 App 内复盘页面
 3. **撤销上一步**——至少覆盖误录任务结果
 4. **湖中仙女**——扩展角色，需要额外的验人流程屏
 5. **计时器**——组队讨论限时，防止一轮聊二十分钟

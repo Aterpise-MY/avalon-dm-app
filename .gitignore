@@ -7,3 +7,6 @@ dist/
 !.env.example
 .vite/
 coverage/
+
+# MCP server config — holds the Supabase project_ref, keep it out of the public repo
+.mcp.json

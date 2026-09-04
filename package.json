@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "阿瓦隆 DM 助手 — 单机、离线、移动端优先的主持人助手",
+  "description": "阿瓦隆 DM 助手 — 使用 Supabase 登录与云端记录的移动端主持工具",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -12,9 +12,10 @@
     "test:watch": "vitest"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "dependencies": {
+    "@supabase/supabase-js": "2.115.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
