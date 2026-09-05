@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { knownTo, merlinVisiblePlayers } from "./avalon-dm.jsx";
+import { evilRecognitionPlayers, knownTo, merlinVisiblePlayers } from "./avalon-dm.jsx";
 
 const players = [
   { id: "merlin", role: "merlin" },
@@ -22,15 +22,15 @@ describe("night information", () => {
     expect(merlinVisiblePlayers(players).map((player) => player.id)).toEqual(["assassin", "morgana"]);
   });
 
-  it("shows Oberon nobody", () => {
-    const information = knownTo(players[4], players);
-
-    expect(information.list).toEqual([]);
+  it("lets only the Assassin and Morgana recognize each other", () => {
+    expect(evilRecognitionPlayers(players).map((player) => player.id)).toEqual(["assassin", "morgana"]);
+    expect(knownTo(players[1], players).list.map((player) => player.id)).toEqual(["morgana"]);
+    expect(knownTo(players[2], players).list.map((player) => player.id)).toEqual(["assassin"]);
   });
 
-  it("hides Oberon from the other evil players", () => {
-    const information = knownTo(players[1], players);
+  it.each(["mordred", "oberon", "minion", "servant"])("shows %s nobody", (role) => {
+    const information = knownTo(players.find((player) => player.role === role), players);
 
-    expect(information.list.map((player) => player.id)).toEqual(["morgana", "mordred", "minion"]);
+    expect(information.list).toEqual([]);
   });
 });

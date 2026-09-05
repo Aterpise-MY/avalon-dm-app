@@ -86,12 +86,16 @@ const ROLES = {
 };
 const REVEAL_ORDER = ["oberon", "morgana", "assassin", "mordred", "minion", "merlin", "percival"];
 const sideColor = (k) => (ROLES[k]?.side === "evil" ? C.crimson : C.azure);
-const isEvil = (p) => ROLES[p?.role]?.side === "evil";
 const isGood = (p) => ROLES[p?.role]?.side === "good";
 const MERLIN_VISIBLE_ROLES = new Set(["assassin", "morgana"]);
+const EVIL_RECOGNITION_ROLES = new Set(["assassin", "morgana"]);
 
 export function merlinVisiblePlayers(players) {
   return players.filter((player) => MERLIN_VISIBLE_ROLES.has(player.role));
+}
+
+export function evilRecognitionPlayers(players) {
+  return players.filter((player) => EVIL_RECOGNITION_ROLES.has(player.role));
 }
 
 function buildRoles(count, o) {
@@ -112,15 +116,12 @@ const shuffle = (a) => { const b = [...a]; for (let i = b.length - 1; i > 0; i--
 /* 每个角色在夜里能看到谁 */
 export function knownTo(player, players) {
   const others = players.filter((p) => p.id !== player.id);
-  const evils = others.filter(isEvil);
   switch (player.role) {
-    case "merlin": return { label: "你能看见的邪恶角色", list: merlinVisiblePlayers(evils) };
+    case "merlin": return { label: "你能看见的邪恶角色", list: merlinVisiblePlayers(others) };
     case "percival": return { label: "这两人之一是梅林", list: shuffle(others.filter((p) => p.role === "merlin" || p.role === "morgana")) };
-    case "oberon": return { label: "", list: [] };
-    default:
-      if (isEvil(player))
-        return { label: "你的同伙", list: evils.filter((p) => p.role !== "oberon") };
-      return { label: "", list: [] };
+    case "assassin": return { label: "与你相认的莫甘娜", list: others.filter((p) => p.role === "morgana") };
+    case "morgana": return { label: "与你相认的刺客", list: others.filter((p) => p.role === "assassin") };
+    default: return { label: "", list: [] };
   }
 }
 
@@ -255,7 +256,8 @@ export default function AvalonDM({ onSignOut }) {
 
   const [round, setRound] = useState(0);
   const [step, setStep] = useState("leader");
-  const [leader, setLeader] = useState(0);
+  const [leader, setLeader] = useState(null);
+  const [selectedTeamSize, setSelectedTeamSize] = useState(TEAM[7][0]);
   const [team, setTeam] = useState([]);
   const [votes, setVotes] = useState({});
   const [rejects, setRejects] = useState(0);
@@ -423,7 +425,7 @@ export default function AvalonDM({ onSignOut }) {
       gamePlayers = players.map((p) => p.role ? p : { ...p, role: remainingRoles[nextRole++] || "servant" });
       setPlayers(gamePlayers);
     }
-    setRound(0); setStep("leader"); setLeader(Math.floor(Math.random() * count));
+    setRound(0); setStep("leader"); setLeader(null); setSelectedTeamSize(TEAM[count][0]);
     setTeam([]); setVotes({}); setRejects(0); setHistory([]); setMissionResult(null); setWinner(null); setKilled(null);
     setGameId(null);
 
@@ -452,14 +454,10 @@ export default function AvalonDM({ onSignOut }) {
   };
 
   /* ── 任务流程 ── */
-  const teamSize = TEAM[count][round];
+  const teamSize = selectedTeamSize;
   const need = failsNeeded(count, round);
   const yes = Object.values(votes).filter(Boolean).length;
   const no = Object.keys(votes).length - yes;
-
-  const confirmVote = () => {
-    setStep("voteResult");
-  };
 
   const submitMission = (fails) => {
     const ok = fails < need;
@@ -467,7 +465,8 @@ export default function AvalonDM({ onSignOut }) {
     setStep("missionResult");
   };
 
-  const continueAfterVote = () => {
+  const continueAfterVote = (approved) => {
+    if (leader == null) return;
     if (gameId) {
       void persist(`/games/${gameId}/proposals`, {
         method: "POST",
@@ -477,11 +476,11 @@ export default function AvalonDM({ onSignOut }) {
           leaderPlayerId: players[leader].id,
           teamPlayerIds: team,
           votes,
-          approved: yes > no,
+          approved,
         }),
       });
     }
-    if (yes > no) { setStep("mission"); return; }
+    if (approved) { setStep("mission"); return; }
     const r = rejects + 1;
     if (r >= 5) {
       setWinner("evil-vote");
@@ -489,7 +488,7 @@ export default function AvalonDM({ onSignOut }) {
       setPhase("end");
       return;
     }
-    setRejects(r); setLeader((leader + 1) % count); setTeam([]); setVotes({}); setStep("leader");
+    setRejects(r); setLeader(null); setSelectedTeamSize(TEAM[count][round]); setTeam([]); setVotes({}); setStep("leader");
   };
 
   const continueAfterMission = () => {
@@ -510,7 +509,7 @@ export default function AvalonDM({ onSignOut }) {
       });
     }
     const wins = h.filter((x) => x.ok).length, loses = h.length - wins;
-    setRejects(0); setTeam([]); setVotes({}); setMissionResult(null); setLeader((leader + 1) % count);
+    setRejects(0); setTeam([]); setVotes({}); setMissionResult(null); setLeader(null);
     if (loses >= 3) {
       setWinner("evil-mission");
       finishPersistedGame("evil-mission");
@@ -518,7 +517,7 @@ export default function AvalonDM({ onSignOut }) {
       return;
     }
     if (wins >= 3) { setPhase("assassin"); return; }
-    setRound(round + 1); setStep("leader");
+    setSelectedTeamSize(TEAM[count][round + 1]); setRound(round + 1); setStep("leader");
   };
 
   const doAssassinate = (p) => {
@@ -551,11 +550,13 @@ export default function AvalonDM({ onSignOut }) {
       });
     }
 
-    s.push({
-      t: "坏人相认",
-      x: `邪恶阵营睁眼，互相确认${inDeck("oberon") ? "（奥伯伦不睁眼，也不被看到）" : ""}。确认完毕后闭眼、握拳。`,
-      who: by((p) => isEvil(p) && p.role !== "oberon"),
-    });
+    if (inDeck("morgana")) {
+      s.push({
+        t: "刺客与莫甘娜相认",
+        x: "只有刺客与莫甘娜睁眼，互相确认。其他所有角色保持闭眼，不要有任何动作。确认完毕后两人闭眼、握拳。",
+        who: evilRecognitionPlayers(players),
+      });
+    }
 
     if (dealMode === "manual") {
       s.push({
@@ -879,25 +880,23 @@ export default function AvalonDM({ onSignOut }) {
 
   /* ═══════════ 任务流程 ═══════════ */
   if (phase === "game") {
-    const ld = players[leader];
+    const ld = leader == null ? null : players[leader];
     const confirmedRoles = REVEAL_ORDER.flatMap((role) => players.filter((p) => p.role === role));
     const roundFlow = [
-      ["leader", "交队长"], ["team", "组队"], ["vote", "投票"],
-      ["voteResult", "票决"], ["mission", "任务"], ["missionResult", "结果"],
+      ["leader", "选队长"], ["team", "选队友"], ["vote", "判定"],
+      ["mission", "任务"], ["missionResult", "结果"],
     ];
     const flowIndex = roundFlow.findIndex(([k]) => k === step);
-    const votePassed = yes > no;
-    const visibleRejects = rejects + (step === "voteResult" && !votePassed ? 1 : 0);
+    const visibleRejects = rejects;
     const projectedHistory = missionResult ? [...history, missionResult] : history;
     const projectedWins = projectedHistory.filter((h) => h.ok).length;
     const projectedLosses = projectedHistory.length - projectedWins;
     const actionText = {
-      leader: `把队长标记交给 ${ld.name}，并宣布本轮需要 ${teamSize} 人执行任务。`,
-      team: `请 ${ld.name} 提名 ${teamSize} 位玩家。DM 在下方点选他们。`,
-      vote: "请全员同时亮出赞成或反对牌，然后由 DM 逐个记录。",
-      voteResult: votePassed
-        ? `向全员宣布：${yes} 比 ${no}，组队通过。`
-        : `向全员宣布：${yes} 比 ${no}，组队被否决。`,
+      leader: ld
+        ? `本轮由 ${ld.name} 担任队长，共选择 ${teamSize} 人出征。`
+        : "请先选择本轮队长和出征人数。",
+      team: `请 ${ld?.name || "队长"} 提名 ${teamSize} 位玩家。DM 在下方点选他们。`,
+      vote: "DM 查看现场投票后直接判定。逐人票数可以记录，也可以跳过。",
       mission: `请 ${teamSize} 位任务成员各交一张任务牌。收齐后洗混，并统计失败牌。`,
       missionResult: missionResult?.ok
         ? `向全员宣布：任务成功，共有 ${missionResult.fails} 张失败牌。`
@@ -906,24 +905,21 @@ export default function AvalonDM({ onSignOut }) {
 
     let gameFooter = null;
     if (step === "leader") {
-      gameFooter = <Btn full onClick={() => setStep("team")}>队长已交接，开始组队</Btn>;
+      gameFooter = <Btn full disabled={leader == null} onClick={() => setStep("team")}>确认队长与人数，开始选队友</Btn>;
     } else if (step === "team") {
       gameFooter = (
         <Btn full disabled={team.length !== teamSize} onClick={() => { setVotes({}); setStep("vote"); }}>
-          {team.length}/{teamSize} 人 · 确认队伍并投票
+          {team.length}/{teamSize} 人 · 确认出征队伍
         </Btn>
       );
     } else if (step === "vote") {
       gameFooter = (
-        <Btn full disabled={Object.keys(votes).length !== count} onClick={confirmVote}>
-          {Object.keys(votes).length === count ? "查看并宣布投票结果" : `还有 ${count - Object.keys(votes).length} 人没投`}
-        </Btn>
-      );
-    } else if (step === "voteResult") {
-      gameFooter = (
-        <Btn full onClick={continueAfterVote}>
-          {votePassed ? "宣布完毕，进入任务" : rejects + 1 >= 5 ? "宣布第五次否决结果" : "宣布完毕，交接下一位队长"}
-        </Btn>
+        <div className="grid grid-cols-2 gap-3">
+          <Btn full tone="ghost" onClick={() => continueAfterVote(false)}>
+            {rejects + 1 >= 5 ? "第五次否决" : "组队失败"}
+          </Btn>
+          <Btn full onClick={() => continueAfterVote(true)}>通过，开始出征</Btn>
+        </div>
       );
     } else if (step === "missionResult") {
       gameFooter = (
@@ -934,7 +930,7 @@ export default function AvalonDM({ onSignOut }) {
     }
 
     return (
-      <Shell {...shellProps} eyebrow={`第 ${round + 1} 轮任务 · 需 ${teamSize} 人${need === 2 ? " · 需 2 张失败牌" : ""}`}
+      <Shell {...shellProps} eyebrow={`第 ${round + 1} 轮任务 · ${teamSize} 人出征${need === 2 ? " · 需 2 张失败牌" : ""}`}
         title={roundFlow[flowIndex]?.[1] || "任务流程"}
         footer={gameFooter}>
         {dealMode === "manual" && (
@@ -958,10 +954,11 @@ export default function AvalonDM({ onSignOut }) {
           {TEAM[count].map((sz, i) => {
             const h = history[i] || (i === round ? missionResult : null);
             const bg = h ? (h.ok ? C.azure : C.crimson) : i === round ? C.panel : "transparent";
+            const displayedSize = history[i]?.team?.length || (i === round ? teamSize : sz);
             return (
               <div key={i} className="rounded-full flex items-center justify-center"
                 style={{ width: 42, height: 42, background: bg, border: `1px solid ${h ? bg : i === round ? C.gold : C.line}`, ...mono, fontSize: 14, color: h ? "#fff" : C.dim }}>
-                {sz}{failsNeeded(count, i) === 2 && <span style={{ fontSize: 9, marginLeft: 1 }}>✦</span>}
+                {displayedSize}{failsNeeded(count, i) === 2 && <span style={{ fontSize: 9, marginLeft: 1 }}>✦</span>}
               </div>
             );
           })}
@@ -974,7 +971,7 @@ export default function AvalonDM({ onSignOut }) {
         </div>
 
         <Rule label="本轮流程" />
-        <div className="grid grid-cols-6 gap-1">
+        <div className="grid grid-cols-5 gap-1">
           {roundFlow.map(([k, label], i) => (
             <div key={k} className="rounded-lg flex flex-col items-center justify-center"
               style={{ minHeight: 48, background: i === flowIndex ? C.gold : i < flowIndex ? C.panel : "transparent", border: `1px solid ${i === flowIndex ? C.gold : C.line}` }}>
@@ -989,18 +986,45 @@ export default function AvalonDM({ onSignOut }) {
           <div style={{ ...serif, fontSize: 18, lineHeight: 1.75, marginTop: 8 }}>{actionText}</div>
         </div>
 
-        <Rule label="当前队长" />
-        <div className="flex items-center gap-3">
-          <Avatar p={ld} size={52} ring={C.gold} />
-          <div>
-            <div style={{ ...serif, fontSize: 19 }}>{ld.name}</div>
-            <div style={{ fontSize: 13, color: C.dim }}>由他挑选 {teamSize} 人出任务</div>
-          </div>
-        </div>
+        {step === "leader" ? (
+          <>
+            <Rule label="选择本轮队长" />
+            <div className="grid grid-cols-3 gap-3">
+              {players.map((p, index) => (
+                <button key={p.id} onClick={() => setLeader(index)} className="flex flex-col items-center active:scale-95 transition">
+                  <Avatar p={p} size={68} ring={leader === index ? C.gold : C.line} dim={leader !== index} />
+                  <div style={{ fontSize: 13, marginTop: 6 }}>{p.name}</div>
+                  {leader === index && <div style={{ fontSize: 12, color: C.gold }}>本轮队长</div>}
+                </button>
+              ))}
+            </div>
+            <Rule label="选择出征人数" />
+            <div className="flex gap-2 flex-wrap">
+              {Array.from({ length: count }, (_, i) => i + 1).map((size) => (
+                <button key={size} onClick={() => { setSelectedTeamSize(size); setTeam([]); }} className="rounded-xl active:scale-95 transition"
+                  style={{ width: 54, padding: "14px 0", background: size === teamSize ? C.gold : C.panel, border: `1px solid ${size === teamSize ? C.gold : C.line}`, color: size === teamSize ? C.ink : C.text, ...mono, fontSize: 18 }}>
+                  {size}
+                </button>
+              ))}
+            </div>
+            <div style={{ color: C.dim, fontSize: 12, marginTop: 10 }}>标准规则建议本轮 {TEAM[count][round]} 人，DM 可按本局规则调整。</div>
+          </>
+        ) : (
+          <>
+            <Rule label="当前队长" />
+            <div className="flex items-center gap-3">
+              <Avatar p={ld} size={52} ring={C.gold} />
+              <div>
+                <div style={{ ...serif, fontSize: 19 }}>{ld?.name}</div>
+                <div style={{ fontSize: 13, color: C.dim }}>由他挑选 {teamSize} 人出任务</div>
+              </div>
+            </div>
+          </>
+        )}
 
         {(step === "team" || step === "vote") && (
           <>
-            <Rule label={step === "vote" ? "逐个记录投票" : "点选出队的人"} />
+            <Rule label={step === "vote" ? "记录投票（可跳过）" : "点选出队的人"} />
             <div className="grid grid-cols-3 gap-3">
               {players.map((p) => {
                 const on = team.includes(p.id);
@@ -1029,18 +1053,7 @@ export default function AvalonDM({ onSignOut }) {
                 );
               })}
             </div>
-            {step === "vote" && <div style={{ color: C.dim, fontSize: 12, marginTop: 12 }}>连点切换：未投 → 赞成 → 反对</div>}
-          </>
-        )}
-
-        {step === "voteResult" && (
-          <>
-            <Rule label="投票结果" />
-            <div className="rounded-2xl p-5 text-center" style={{ background: C.panel, border: `1px solid ${votePassed ? C.azure : C.crimson}` }}>
-              <div style={{ ...mono, fontSize: 30, color: votePassed ? C.azure : C.crimson }}>{yes} : {no}</div>
-              <div style={{ ...serif, fontSize: 22, marginTop: 8 }}>{votePassed ? "组队通过" : "组队被否决"}</div>
-              {!votePassed && <div style={{ color: C.dim, fontSize: 13, marginTop: 8 }}>这是连续第 {rejects + 1} 次否决</div>}
-            </div>
+            {step === "vote" && <div style={{ color: C.dim, fontSize: 12, marginTop: 12 }}>连点切换：未投 → 赞成 → 反对。无需全部记录，DM 可直接在底部判定结果。{Object.keys(votes).length > 0 ? ` 当前已记录 ${yes} 赞成、${no} 反对。` : ""}</div>}
           </>
         )}
 
