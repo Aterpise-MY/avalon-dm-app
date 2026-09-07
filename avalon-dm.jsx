@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { apiRequest, uploadPlayerPhoto } from "./supabase-client.js";
+import { Room, useRoom } from "./room.js";
 
 /* ── 圆桌调色板 ───────────────────────────────── */
 export const C = {
@@ -270,9 +271,15 @@ export default function AvalonDM({ onSignOut }) {
   const [startingGame, setStartingGame] = useState(false);
   const [clearingPlayers, setClearingPlayers] = useState(false);
   const [playerMessage, setPlayerMessage] = useState("");
+  const [startedAt, setStartedAt] = useState(null);
+
+  /* 房间：误刷新之后回到这一局 */
+  const room = useRoom();
 
   const fileRef = useRef(null);
   const pendingRef = useRef(null);
+  const cloudSaveRef = useRef(null);
+  const lastSavedRef = useRef("");
 
   /* 上次的玩家名单 */
   useEffect(() => {
@@ -302,11 +309,52 @@ export default function AvalonDM({ onSignOut }) {
 
   useEffect(() => {
     setPlayers((prev) => {
+      /* 人数没变就原样返回，别把刚恢复出来的名单又截一遍 */
+      if (prev.length === count) return prev;
       const next = [];
       for (let i = 0; i < count; i++) next.push(prev[i] || makePlayer(i));
       return next;
     });
   }, [count]);
+
+  /*
+   * 存档。等 useRoom 查完（status 变成 none）才开始写，
+   * 否则挂载时的第一次写会把刚找到的房间盖掉。
+   */
+  useEffect(() => {
+    if (room.status !== "none") return;
+
+    const snapshot = Room.pack({
+      phase, count, players, opts, dealMode, passIdx, nightStep,
+      round, step, leader, selectedTeamSize, team, votes, rejects,
+      history, missionResult, winner, killed, gameId, startedAt,
+    });
+
+    /* 不在可恢复阶段（入座、配角色、终局）——顺手把上一局的档清掉 */
+    if (!snapshot) {
+      if (lastSavedRef.current) {
+        Room.clear();
+        lastSavedRef.current = "";
+      }
+      return;
+    }
+
+    const fingerprint = Room.fingerprint(snapshot);
+    if (fingerprint === lastSavedRef.current) return;
+    lastSavedRef.current = fingerprint;
+
+    Room.write(JSON.stringify(snapshot));
+
+    if (!gameId) return; /* 传阅与夜晚阶段还没有 gameId，只能先存本地 */
+    clearTimeout(cloudSaveRef.current);
+    cloudSaveRef.current = setTimeout(() => {
+      void persist(`/games/${gameId}/state`, { method: "PATCH", body: JSON.stringify({ state: snapshot }) });
+    }, 1200);
+  }, [room.status, phase, count, players, opts, dealMode, passIdx, nightStep,
+      round, step, leader, selectedTeamSize, team, votes, rejects,
+      history, missionResult, winner, killed, gameId, startedAt]);
+
+  useEffect(() => () => clearTimeout(cloudSaveRef.current), []);
 
   const setP = (i, patch) => setPlayers((ps) => ps.map((p, k) => (k === i ? { ...p, ...patch } : p)));
   const setPlayerById = (id, patch) => setPlayers((ps) => ps.map((p) => (p.id === id ? { ...p, ...patch } : p)));
@@ -400,6 +448,8 @@ export default function AvalonDM({ onSignOut }) {
   const overflow = wantedEvil > evilSlots;
 
   const startDeal = () => {
+    /* 身份从这一刻起才存在，12 小时的存档时效也从这里算 */
+    setStartedAt(new Date().toISOString());
     setNightStep(0);
     if (dealMode === "auto") {
       const rs = shuffle(composition);
@@ -442,7 +492,47 @@ export default function AvalonDM({ onSignOut }) {
   const resetAll = () => {
     setPlayers((ps) => ps.map((p) => ({ ...p, role: null })));
     setGameId(null);
+    setStartedAt(null);
     setPhase("setup");
+  };
+
+  /* 回到房间：二十个 setState 都在同一个点击处理函数里，React 会合成一次提交，
+     不会出现 leader 还指着旧名单的中间态 */
+  const enterRoom = () => {
+    const s = room.candidate;
+    if (!s) return;
+    setCount(s.count);
+    setPlayers(s.players);
+    setOpts(s.opts);
+    setDealMode(s.dealMode);
+    setPassIdx(s.passIdx);
+    setSealBroken(false);
+    setNightStep(s.nightStep);
+    setRound(s.round);
+    setStep(s.step);
+    setLeader(s.leader);
+    setSelectedTeamSize(s.selectedTeamSize);
+    setTeam(s.team);
+    setVotes(s.votes);
+    setRejects(s.rejects);
+    setHistory(s.history);
+    setMissionResult(s.missionResult);
+    setWinner(null);
+    setKilled(s.killed);
+    setGameId(s.gameId);
+    setStartedAt(s.startedAt);
+    setSaved(null);
+    lastSavedRef.current = ""; /* 让存档效应立刻补写一次 */
+    setPhase(s.phase);
+    room.dismiss();
+  };
+
+  const leaveRoom = () => {
+    const s = room.candidate;
+    Room.clear();
+    lastSavedRef.current = "";
+    if (s?.gameId) void persist(`/games/${s.gameId}/abandon`, { method: "PATCH" });
+    room.dismiss();
   };
 
   const finishPersistedGame = (nextWinner, killedPlayerId = null) => {
@@ -611,6 +701,76 @@ export default function AvalonDM({ onSignOut }) {
   };
 
   const shellProps = { dbStatus, phase, onSignOut, players, peek, setPeek };
+
+  /* ═══════════ 房间 ═══════════ */
+  if (phase === "setup" && room.status === "checking") {
+    return (
+      <div className="flex min-h-dvh items-center justify-center"
+        style={{ background: C.ink, color: C.gold, ...serif }}>
+        正在打开圆桌…
+      </div>
+    );
+  }
+
+  if (room.status === "found" && room.candidate) {
+    const s = room.candidate;
+    const wins = s.history.filter((h) => h.ok).length;
+    const minutes = Math.max(1, Math.round((Date.now() - Date.parse(s.startedAt)) / 60000));
+    const ago = minutes < 60 ? `约 ${minutes} 分钟前` : `约 ${Math.round(minutes / 60)} 小时前`;
+    const rows = [
+      ["房间号", s.gameId ? `#${s.gameId}` : "尚未建立", true],
+      ["人数", `${s.count} 人 · ${SPLIT[s.count].good} 好 ${SPLIT[s.count].evil} 坏`, true],
+      ["发牌", s.dealMode === "auto" ? "App 发牌" : "实体牌", false],
+      ["进度", Room.label(s), false],
+      ["战绩", `成功 ${wins} · 失败 ${s.history.length - wins}`, true],
+      ["开局", ago, false],
+    ];
+
+    return (
+      /* players 传空数组：确认之前不该出现「按住看底牌」，身份还不能亮 */
+      <Shell {...shellProps} players={[]} eyebrow="AVALON · 主持人" title="房间还开着" center
+        footer={
+          <div className="flex flex-col gap-2">
+            <Btn full onClick={enterRoom}>回到房间 · {Room.label(s)}</Btn>
+            <Btn full small tone="ghost" onClick={leaveRoom}>离开房间，重新开始</Btn>
+          </div>
+        }>
+        <div style={{ ...serif, color: C.dim, fontSize: 14, lineHeight: 1.7 }}>
+          上一局还没打完。桌上这些人、他们的身份、打到哪一步，都还留着。
+        </div>
+
+        <div className="rounded-xl mt-4 p-4" style={{ background: C.panel, border: `1px solid ${C.goldDim}` }}>
+          {rows.map(([label, value, isData]) => (
+            <div key={label} className="flex items-center justify-between gap-3" style={{ padding: "5px 0" }}>
+              <span style={{ ...serif, color: C.goldDim, fontSize: 12, letterSpacing: "0.28em", flexShrink: 0 }}>{label}</span>
+              <span style={{ ...(isData ? mono : serif), color: C.text, fontSize: 14, textAlign: "right" }}>{value}</span>
+            </div>
+          ))}
+        </div>
+
+        <Rule label="房间里的人" />
+
+        {/* 描边一律用 line：这一屏可能当着所有玩家的面打开，阵营颜色不能泄出去 */}
+        <div className="flex flex-wrap gap-3 justify-center">
+          {s.players.map((p) => (
+            <div key={p.id} className="flex flex-col items-center gap-1" style={{ width: 60 }}>
+              <Avatar p={p} size={54} ring={C.line} />
+              <span style={{
+                color: C.dim, fontSize: 12, maxWidth: 60,
+                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              }}>{p.name}</span>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ color: C.dim, fontSize: 12, marginTop: 18, textAlign: "center", lineHeight: 1.6 }}>
+          {room.source === "cloud"
+            ? "存档来自云端，换台设备登录同一个账号也能接着打"
+            : "存档只在这台手机上（保存时云端离线）"}
+        </div>
+      </Shell>
+    );
+  }
 
   /* ═══════════ 玩家录入 ═══════════ */
   if (phase === "setup") {
