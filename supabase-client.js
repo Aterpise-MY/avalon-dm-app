@@ -59,6 +59,11 @@ async function withSignedPlayerPhotos(client, players) {
   }));
 }
 
+/* 恢复房间时用：存档里只有 photoPath，签名 URL 得当场重新签发 */
+export async function signPlayerPhotos(players) {
+  return withSignedPlayerPhotos(requireClient(), players);
+}
+
 export async function uploadPlayerPhoto(playerId, jpegBlob) {
   const client = requireClient();
   const user = await requireUser();
@@ -137,6 +142,39 @@ async function listGames(client, limit = 20) {
     .limit(safeLimit);
   throwIfError(error);
   return { games: games || [] };
+}
+
+const ROOM_WINDOW_MS = 12 * 60 * 60 * 1000;
+
+/*
+ * 找出还开着的房间：最近一局 status='active' 且开局不到 12 小时的对局。
+ * 顺手把超时的旧局标成 abandoned——这是一次读操作里带的写，但它幂等、
+ * 只碰 RLS 限定的自己的行，而且省掉一次往返。
+ */
+async function activeGame(client) {
+  const { data: games, error } = await client
+    .from("games")
+    .select("id, status, started_at, state")
+    .eq("status", "active")
+    .order("started_at", { ascending: false })
+    .limit(10);
+  throwIfError(error);
+
+  const cutoff = Date.now() - ROOM_WINDOW_MS;
+  const rows = games || [];
+  const stale = rows.filter((game) => Date.parse(game.started_at) < cutoff);
+  const fresh = rows.find((game) => Date.parse(game.started_at) >= cutoff);
+
+  if (stale.length) {
+    const { error: abandonError } = await client
+      .from("games")
+      .update({ status: "abandoned", state: null, ended_at: new Date().toISOString() })
+      .in("id", stale.map(({ id }) => id));
+    throwIfError(abandonError);
+  }
+
+  if (!fresh?.state) return { game: null };
+  return { game: { id: String(fresh.id), startedAt: fresh.started_at, state: fresh.state } };
 }
 
 async function gameDetails(client, gameId) {
@@ -243,6 +281,33 @@ export async function apiRequest(path, options = {}) {
     return { id: data.id };
   }
 
+  /* 存档写入：加 status 判断，免得一条迟到的写请求把已经结束的局又救活 */
+  const stateMatch = path.match(/^\/games\/(\d+)\/state$/);
+  if (method === "PATCH" && stateMatch) {
+    const { data, error } = await client
+      .from("games")
+      .update({ state: body.state ?? null })
+      .eq("id", Number(stateMatch[1]))
+      .eq("status", "active")
+      .select("id")
+      .maybeSingle();
+    throwIfError(error);
+    return { id: data?.id ?? null, saved: Boolean(data) };
+  }
+
+  const abandonMatch = path.match(/^\/games\/(\d+)\/abandon$/);
+  if (method === "PATCH" && abandonMatch) {
+    const { data, error } = await client
+      .from("games")
+      .update({ status: "abandoned", state: null, ended_at: new Date().toISOString() })
+      .eq("id", Number(abandonMatch[1]))
+      .eq("status", "active")
+      .select("id, status")
+      .maybeSingle();
+    throwIfError(error);
+    return data || { id: Number(abandonMatch[1]), status: "abandoned" };
+  }
+
   const finishMatch = path.match(/^\/games\/(\d+)\/finish$/);
   if (method === "PATCH" && finishMatch) {
     const { data, error } = await client
@@ -251,6 +316,7 @@ export async function apiRequest(path, options = {}) {
         status: "finished",
         winner: body.winner,
         killed_player_id: body.killedPlayerId || null,
+        state: null, /* 终局即清档：房间不该在结束后还能回去 */
         ended_at: new Date().toISOString(),
       })
       .eq("id", Number(finishMatch[1]))
@@ -259,6 +325,9 @@ export async function apiRequest(path, options = {}) {
     throwIfError(error);
     return data;
   }
+
+  /* 必须排在 /games? 与 /games/:id 之前，否则会被它们截走 */
+  if (method === "GET" && path === "/games/active") return activeGame(client);
 
   if (method === "GET" && path.startsWith("/games?")) {
     const query = new URLSearchParams(path.slice(path.indexOf("?") + 1));
